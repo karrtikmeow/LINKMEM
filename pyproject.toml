@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linkmem"
+version = "0.1.0"
+description = "LINKMEM: Interactive Non-Iterative Learning using Linked-List Experience Memory"
+authors = [{ name = "LINKMEM Team" }]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.scripts]
+linkmem-demo = "linkmem.__main__:run_headless_demo"
+
+[tool.setuptools.packages.find]
+where = ["src"]
