@@ -88,7 +88,10 @@ class LearningEngine:
         self.episode_lookups = 0
         self.episode_comparisons = 0
         self._stopped = False
+        if hasattr(self.agent, "reset_episode"):
+            self.agent.reset_episode()
         return self.env.reset()
+
 
     def run_step(self, manual_action: Optional[Action] = None) -> StepEvent:
         """Execute one complete non-iterative learning step.

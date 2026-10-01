@@ -1,4 +1,4 @@
-"""Headless demonstration entry point for LINKMEM."""
+"""Entry point for LINKMEM: launches interactive GUI by default, or headless demo if --headless."""
 
 import sys
 from linkmem.core.environment import GridWorld
@@ -26,7 +26,6 @@ def run_headless_demo():
         max_steps_per_episode=60,
     )
 
-    # 1. Create GridWorld environment with a few obstacles
     obstacles = {(2, 1), (2, 2), (2, 3), (4, 4), (4, 5)}
     env = GridWorld(
         width=config.grid_width,
@@ -40,18 +39,13 @@ def run_headless_demo():
         reward_collision=config.reward_collision,
     )
 
-    # 2. Create ExperienceMemory
     memory = ExperienceMemory(max_capacity=config.n_max)
-
-    # 3. Create Agent
     agent = Agent(
         memory=memory,
         theta=config.theta,
         novelty_strategy=config.novelty_strategy,
         seed=config.random_seed,
     )
-
-    # 4. Create LearningEngine
     engine = LearningEngine(
         env=env,
         memory=memory,
@@ -63,7 +57,6 @@ def run_headless_demo():
     print(f"Start: {env.start_pos} | Goal: {env.goal_pos} | Obstacles: {len(obstacles)}")
     print("-" * 78)
 
-    # 5. Run episodes and display live measurements
     for ep in range(1, config.episodes + 1):
         metrics = engine.run_episode()
         print(
@@ -83,5 +76,14 @@ def run_headless_demo():
     print("=" * 78)
 
 
+def main():
+    """Main CLI entry point."""
+    if "--headless" in sys.argv or "-h" in sys.argv:
+        run_headless_demo()
+    else:
+        from linkmem.gui.app import run_gui
+        run_gui()
+
+
 if __name__ == "__main__":
-    run_headless_demo()
+    main()

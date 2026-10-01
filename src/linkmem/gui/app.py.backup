@@ -1,0 +1,496 @@
+"""MainWindow: Root interactive desktop application for LINKMEM — Phase 4 redesign."""
+
+from __future__ import annotations
+
+import queue
+import tkinter as tk
+from tkinter import ttk
+from typing import Optional
+
+from linkmem.core.types import Action, LearningMode, NoveltyStrategy, PruningStrategy
+from linkmem.core.environment import GridWorld
+from linkmem.core.memory import ExperienceMemory
+from linkmem.core.agent import Agent
+from linkmem.engine.learning_engine import LearningEngine
+from linkmem.engine.events import StepEvent
+from linkmem.engine.metrics import EpisodeMetrics
+from linkmem.gui.controller import SimulationController
+from linkmem.gui.environments import (
+    PRESET_NAMES,
+    EnvironmentManager,
+    EnvironmentPreset,
+    RandomObstaclesConfig,
+    validate_preset,
+)
+from linkmem.gui.theme import (
+    apply_theme,
+    COLOR_BG_MAIN,
+    COLOR_DANGER,
+    COLOR_PRIMARY,
+    COLOR_SUCCESS,
+    COLOR_TEXT_SECONDARY,
+    COLOR_WARNING,
+    FONT_BODY,
+    FONT_BODY_BOLD,
+    FONT_SMALL,
+    FONT_SUBTITLE,
+    FONT_TITLE,
+)
+from linkmem.gui.views.overview_tab import OverviewTab
+from linkmem.gui.views.trace_tab import TraceTab
+from linkmem.gui.views.memory_tab import MemoryTab
+from linkmem.gui.views.analysis_tab import AnalysisTab
+from linkmem.gui.views.controls_bar import ControlsBar
+from linkmem.gui.views.settings_dialog import SettingsDialog
+from linkmem.gui.views.custom_env_editor import CustomEnvEditor
+from linkmem.utils.config import AppConfig
+
+
+class MainWindow:
+    """Master application window: tabbed notebook layout with environment selector."""
+
+    def __init__(self, root: tk.Tk, config: Optional[AppConfig] = None):
+        self.root = root
+        self.config = config or AppConfig()
+
+        self.root.title("LINKMEM — Interactive Non-Iterative Learning")
+        self.root.geometry("1280x860")
+        self.root.minsize(1000, 700)
+        self.root.configure(background=COLOR_BG_MAIN)
+
+        apply_theme(self.root)
+
+        # Live parameters (settable via SettingsDialog)
+        self._speed_hz: float = 12.0
+
+        # Environment manager owns preset selection
+        self._env_manager = EnvironmentManager()
+
+        # Core simulation components
+        self._init_simulation()
+
+        # GUI
+        self._build_ui()
+        self._bind_keys()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.after(20, self._poll_queue)
+
+    # ------------------------------------------------------------------
+    # Simulation lifecycle
+    # ------------------------------------------------------------------
+
+    def _init_simulation(self) -> None:
+        """Build GridWorld, Memory, Agent, LearningEngine from current env manager."""
+        self.env = self._env_manager.build_gridworld(
+            max_steps=self.config.max_steps_per_episode,
+            reward_goal=self.config.reward_goal,
+            reward_step=self.config.reward_step,
+            reward_collision=self.config.reward_collision,
+        )
+        self.memory = ExperienceMemory(max_capacity=self.config.n_max)
+        self.agent = Agent(
+            memory=self.memory,
+            theta=self.config.theta,
+            novelty_strategy=self.config.novelty_strategy,
+            seed=self.config.random_seed,
+        )
+        self.engine = LearningEngine(
+            env=self.env,
+            memory=self.memory,
+            agent=self.agent,
+            config=self.config,
+            pruning_strategy=self.config.pruning_strategy,
+            max_memory_size=self.config.n_max,
+        )
+        self.controller = SimulationController(self.engine)
+
+    def _rebuild_simulation_for_env(self, preset: EnvironmentPreset) -> None:
+        """Stop the current simulation, rebuild it for a new environment,
+        and resume autonomous execution if it was running.
+        """
+
+        # Remember whether autonomous execution was active.
+        was_running = (
+            self.controller.is_running
+            and self.controller.mode == LearningMode.AUTONOMOUS
+        )
+
+        # Stop the old worker before replacing the controller.
+        self.controller.stop_worker()
+
+        # Preserve current simulation settings.
+        old_theta = self.agent.theta
+        old_n_max = self.engine.max_memory_size
+        old_max_steps = self.engine.max_steps
+
+        # Build the new environment.
+        self.env = GridWorld(
+            width=preset.width,
+            height=preset.height,
+            start_pos=preset.start_pos,
+            goal_pos=preset.goal_pos,
+            obstacles=set(preset.obstacles),
+            max_steps=old_max_steps,
+            reward_goal=self.config.reward_goal,
+            reward_step=self.config.reward_step,
+            reward_collision=self.config.reward_collision,
+        )
+
+        # Fresh experience memory for the new environment.
+        self.memory = ExperienceMemory(
+            max_capacity=old_n_max
+        )
+
+        # New agent using the preserved learning parameters.
+        self.agent = Agent(
+            memory=self.memory,
+            theta=old_theta,
+            novelty_strategy=self.config.novelty_strategy,
+            seed=self.config.random_seed,
+        )
+
+        # New learning engine.
+        self.engine = LearningEngine(
+            env=self.env,
+            memory=self.memory,
+            agent=self.agent,
+            config=self.config,
+            pruning_strategy=self.config.pruning_strategy,
+            max_memory_size=old_n_max,
+        )
+
+        # New simulation controller.
+        self.controller = SimulationController(self.engine)
+
+        # Preserve the current simulation speed.
+        self.controller.set_speed(self._speed_hz)
+
+        # Update all GUI views.
+        self._overview_tab.update_environment(self.env)
+        self._memory_tab.update_memory(self.memory)
+        self._trace_tab.clear()
+        self._analysis_tab.clear()
+
+        # Tell the user that the new environment is ready.
+        self._controls_bar.set_status(
+            "READY — new environment loaded",
+            COLOR_SUCCESS,
+        )
+
+        # If the previous environment was running autonomously,
+        # automatically resume the new environment.
+        if was_running:
+            self.controller.start()
+
+    # UI Construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        # ── Top bar: title + env dropdown ────────────────────────────────
+        top_bar = ttk.Frame(self.root)
+        top_bar.pack(fill=tk.X, padx=10, pady=(8, 4))
+
+        ttk.Label(top_bar, text="LINKMEM", font=FONT_TITLE, foreground=COLOR_PRIMARY).pack(
+            side=tk.LEFT
+        )
+        ttk.Label(
+            top_bar,
+            text="— Non-Iterative Learning via Linked-List Experience Memory",
+            font=FONT_SMALL,
+            foreground=COLOR_TEXT_SECONDARY,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        # Settings button (right)
+        ttk.Button(
+            top_bar,
+            text="⚙ Settings",
+            command=self._open_settings,
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        # Environment dropdown
+        ttk.Label(top_bar, text="Environment:", font=FONT_BODY_BOLD).pack(
+            side=tk.RIGHT, padx=(12, 4)
+        )
+        self._env_var = tk.StringVar(value=self._env_manager.preset_name)
+        env_menu = ttk.Combobox(
+            top_bar,
+            textvariable=self._env_var,
+            values=PRESET_NAMES,
+            state="readonly",
+            width=22,
+            font=FONT_BODY,
+        )
+        env_menu.pack(side=tk.RIGHT)
+        env_menu.bind("<<ComboboxSelected>>", self._handle_env_select)
+
+        # Random Obstacles: extra controls (hidden unless that env is active)
+        self._random_ctrl_frame = ttk.Frame(top_bar)
+        # (packed dynamically in _show_random_controls)
+
+        self._rand_count_var = tk.StringVar(value="10")
+        self._rand_seed_var = tk.StringVar(value="42")
+
+        ttk.Label(self._random_ctrl_frame, text="Count:", font=FONT_SMALL).pack(
+            side=tk.LEFT, padx=(8, 2)
+        )
+        ttk.Entry(self._random_ctrl_frame, textvariable=self._rand_count_var, width=4).pack(
+            side=tk.LEFT
+        )
+        ttk.Label(self._random_ctrl_frame, text="Seed:", font=FONT_SMALL).pack(
+            side=tk.LEFT, padx=(6, 2)
+        )
+        ttk.Entry(self._random_ctrl_frame, textvariable=self._rand_seed_var, width=5).pack(
+            side=tk.LEFT
+        )
+        ttk.Button(
+            self._random_ctrl_frame,
+            text="Generate",
+            command=self._handle_random_generate,
+        ).pack(side=tk.LEFT, padx=4)
+
+        # Custom env editor button (hidden unless Custom is active)
+        self._custom_edit_btn = ttk.Button(
+            top_bar,
+            text="✏ Edit Environment",
+            command=self._open_custom_editor,
+        )
+
+        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8, pady=2)
+
+        # ── Tabbed notebook ───────────────────────────────────────────────
+        self._notebook = ttk.Notebook(self.root)
+        self._notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
+
+        self._overview_tab = OverviewTab(self._notebook, self.env)
+        self._notebook.add(self._overview_tab, text="  Overview  ")
+
+        self._trace_tab = TraceTab(self._notebook)
+        self._notebook.add(self._trace_tab, text="  Algorithm Trace  ")
+
+        self._memory_tab = MemoryTab(self._notebook, self.memory)
+        self._notebook.add(self._memory_tab, text="  Memory  ")
+
+        self._analysis_tab = AnalysisTab(self._notebook)
+        self._notebook.add(self._analysis_tab, text="  Analysis  ")
+
+        # ── Bottom controls bar ───────────────────────────────────────────
+        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8, pady=(4, 0))
+
+        self._controls_bar = ControlsBar(
+            self.root,
+            on_start=self.controller.start,
+            on_pause=self.controller.pause,
+            on_step=self._handle_step_click,
+            on_reset=self._handle_reset,
+            on_mode_change=self.controller.set_mode,
+        )
+        self._controls_bar.pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    # ------------------------------------------------------------------
+    # Key bindings
+    # ------------------------------------------------------------------
+
+    def _bind_keys(self) -> None:
+        self.root.bind("<Up>",    lambda e: self._handle_manual_key(Action.UP))
+        self.root.bind("<Down>",  lambda e: self._handle_manual_key(Action.DOWN))
+        self.root.bind("<Left>",  lambda e: self._handle_manual_key(Action.LEFT))
+        self.root.bind("<Right>", lambda e: self._handle_manual_key(Action.RIGHT))
+        self.root.bind("<w>",     lambda e: self._handle_manual_key(Action.UP))
+        self.root.bind("<s>",     lambda e: self._handle_manual_key(Action.DOWN))
+        self.root.bind("<a>",     lambda e: self._handle_manual_key(Action.LEFT))
+        self.root.bind("<d>",     lambda e: self._handle_manual_key(Action.RIGHT))
+
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _handle_step_click(self) -> None:
+        self.controller.step()
+
+    def _handle_reset(self) -> None:
+        self.controller.reset()
+        self._overview_tab.clear()
+        self._trace_tab.clear()
+        self._analysis_tab.clear()
+        self._memory_tab.update_memory(self.memory)
+
+    def _handle_manual_key(self, action: Action) -> None:
+        if self.controller.mode == LearningMode.MANUAL:
+            self.controller.manual_step(action)
+
+    # -- Environment selection -----------------------------------------
+
+    def _handle_env_select(self, event=None) -> None:
+        selected = self._env_var.get()
+
+        # Show/hide extra controls
+        self._random_ctrl_frame.pack_forget()
+        self._custom_edit_btn.pack_forget()
+
+        if selected == "Random Obstacles":
+            self._random_ctrl_frame.pack(side=tk.RIGHT, padx=4)
+            self._apply_env_switch(selected)
+        elif selected == "Custom Environment":
+            self._custom_edit_btn.pack(side=tk.RIGHT, padx=4)
+            # Open editor immediately for custom
+            self._open_custom_editor()
+        else:
+            self._apply_env_switch(selected)
+
+    def _apply_env_switch(self, name: str, random_cfg: Optional[RandomObstaclesConfig] = None) -> None:
+        """Switch to a named preset, rebuild simulation, notify views."""
+        self.controller.stop_worker()
+
+        if random_cfg:
+            ok, msg = self._env_manager.apply_random_config(random_cfg)
+        else:
+            ok, msg = self._env_manager.select_preset(name)
+
+        if not ok:
+            self._controls_bar.set_status(f"⚠ {msg}", COLOR_DANGER)
+            return
+
+        self._rebuild_simulation_for_env(self._env_manager.active_preset)
+
+    def _handle_random_generate(self) -> None:
+        try:
+            count = int(self._rand_count_var.get().strip())
+            seed_str = self._rand_seed_var.get().strip()
+            seed = int(seed_str) if seed_str else None
+        except ValueError:
+            self._controls_bar.set_status("⚠ Invalid random obstacle count or seed.", COLOR_DANGER)
+            return
+
+        cfg = RandomObstaclesConfig(
+            width=8, height=8,
+            obstacle_count=count,
+            seed=seed,
+        )
+        self._apply_env_switch("Random Obstacles", random_cfg=cfg)
+
+    def _open_custom_editor(self) -> None:
+        preset = self._env_manager.active_preset
+        # Ensure we pass a custom-type preset to the editor
+        from linkmem.gui.environments import EnvironmentPreset as _EP
+        editor_preset = _EP(
+            name="Custom Environment",
+            description="Custom",
+            width=preset.width,
+            height=preset.height,
+            start_pos=preset.start_pos,
+            goal_pos=preset.goal_pos,
+            obstacles=set(preset.obstacles),
+        )
+        CustomEnvEditor(
+            self.root,
+            initial_preset=editor_preset,
+            on_apply=self._apply_custom_preset,
+        )
+
+    def _apply_custom_preset(self, preset: EnvironmentPreset) -> None:
+        ok, msg = self._env_manager.set_custom_preset(preset)
+        if not ok:
+            self._controls_bar.set_status(f"⚠ {msg}", COLOR_DANGER)
+            return
+        self._env_var.set("Custom Environment")
+        self._rebuild_simulation_for_env(preset)
+
+    # -- Settings dialog -----------------------------------------------
+
+    def _open_settings(self) -> None:
+        SettingsDialog(
+            parent=self.root,
+            current_theta=self.agent.theta,
+            current_n_max=self.engine.max_memory_size,
+            current_speed=self._speed_hz,
+            current_max_steps=self.env.max_steps,
+            current_seed=self.config.random_seed,
+            on_apply=self._apply_settings,
+        )
+
+    def _apply_settings(
+        self,
+        theta: float,
+        n_max: int,
+        speed: float,
+        max_steps: int,
+        seed: Optional[int],
+    ) -> None:
+        """Apply settings changes live (no restart needed for theta/n_max/speed)."""
+        ok, msg = self.controller.update_parameters(theta=theta, n_max=n_max)
+        if not ok:
+            self._controls_bar.set_status(f"⚠ {msg}", COLOR_DANGER)
+            return
+
+        self._speed_hz = speed
+        self.controller.set_speed(speed)
+        self.env.max_steps = max_steps
+        self.config.random_seed = seed
+        self._controls_bar.set_status("Settings applied.", COLOR_SUCCESS)
+
+    # ------------------------------------------------------------------
+    # Queue polling
+    # ------------------------------------------------------------------
+
+    def _poll_queue(self) -> None:
+        events_processed = 0
+        while events_processed < 30:
+            try:
+                msg_type, payload = self.controller.queue.get_nowait()
+                events_processed += 1
+            except queue.Empty:
+                break
+
+            if msg_type == "step":
+                event: StepEvent = payload
+                self._overview_tab.update_step(
+                    event,
+                    self.engine.episode_reward,
+                    self.memory.total_comparisons,
+                    self.memory.total_lookups,
+                )
+                self._trace_tab.update_step(event)
+                self._memory_tab.update_memory(self.memory, active_node_id=event.matched_node_id)
+
+            elif msg_type == "episode_complete":
+                metrics: EpisodeMetrics = payload
+                self._overview_tab.update_episode(metrics)
+                self._analysis_tab.add_episode_metric(metrics)
+
+            elif msg_type == "status":
+                status_str: str = payload
+                color = (
+                    COLOR_SUCCESS if "RUNNING" in status_str or "READY" in status_str
+                    else (COLOR_WARNING if "PAUSED" in status_str or "STEPPED" in status_str
+                          else COLOR_PRIMARY)
+                )
+                self._controls_bar.set_status(status_str, color)
+
+            elif msg_type == "mode_changed":
+                mode: LearningMode = payload
+                self._controls_bar.set_mode(mode)
+
+            elif msg_type == "reset":
+                self._overview_tab.env_view.redraw()
+                self._memory_tab.update_memory(self.memory)
+                self._trace_tab.clear()
+
+            elif msg_type == "error":
+                self._controls_bar.set_status(f"ERROR: {payload}", COLOR_DANGER)
+
+        self.root.after(20, self._poll_queue)
+
+    # ------------------------------------------------------------------
+    # Window close
+    # ------------------------------------------------------------------
+
+    def _on_close(self) -> None:
+        self.controller.stop_worker()
+        self.root.destroy()
+
+
+def run_gui() -> None:
+    """Launch the LINKMEM interactive GUI application."""
+    root = tk.Tk()
+    app = MainWindow(root)
+    root.mainloop()
