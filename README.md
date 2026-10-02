@@ -1,44 +1,73 @@
-# LINKMEM — Interactive Non-Iterative Learning using Linked-List Experience Memory
+# LINKMEM
 
-LINKMEM is an interactive reinforcement learning and navigation project demonstrating non-iterative learning with an explicit singly linked-list experience memory. Instead of using neural networks, gradient descent, backpropagation, or iterative training epochs, the agent stores observed experiences as nodes in a linked list and retrieves past decisions using nearest-neighbor search.
+**LINKMEM** is a learning and navigation project where an agent learns to move through a 2D grid using a simple experience memory instead of a neural network.
+
+The agent remembers what it did in previous situations and uses those experiences when it encounters similar situations again.
 
 ## Screenshots
 
+### Main Interface
 ![LINKMEM GUI](screenshots/overview.png)
 
-![Algorithm Trace and Memory] <img width="1175" height="837" alt="trace memory" src="https://github.com/user-attachments/assets/e6bdcceb-eed6-4829-a22a-1b5c142b53df" />
+### Algorithm Trace & Memory
+![Algorithm Trace and Memory](screenshots/trace-memory.png)
+
+### Analysis
+![Analysis](screenshots/analysis.png)
+
+### Custom Environment
+![Custom Environment](screenshots/custom-environment.png)
 
 ## What does it do?
 
-The agent navigates a 2D grid world from a start position to a goal while learning to avoid obstacles and dead ends.
+The project puts an agent inside a grid world with a start point, a goal, and optional obstacles.
 
-At each step:
-1. **Perception**: The agent senses a 6-dimensional continuous state (normalized distances to the goal along X and Y, plus binary indicators for walls or obstacles in the four adjacent cells).
-2. **Memory Lookup**: It scans through its linked-list memory to find the closest previous experience based on Euclidean distance.
-3. **Action Selection**:
-   - If the nearest stored state is within a distance threshold (theta), the agent reuses the action stored in that node.
-   - If the state is novel (distance exceeds theta), the agent explores by taking a heuristic step toward the goal or picking an unblocked direction, prepending a new experience node to the head of the linked list.
-4. **Environment Step**: The environment updates the agent's position and returns a reward.
-5. **Sample-Average Update**: The node's Q-value is updated non-iteratively using a running sample average:
-   `Q_new = Q_old + (reward - Q_old) / n`
-   where `n` is the visit count. No Bellman updates, discount factors (gamma), or TD errors are used.
-6. **Cycle Avoidance**: Episode-local tracking prevents the agent from ping-ponging between neighboring cells or looping in dead ends.
+The agent:
 
-## Features
+1. Looks at its current position and surroundings.
+2. Checks its previous experiences.
+3. Chooses an action based on the closest experience.
+4. Moves through the grid and receives a reward.
+5. Updates the experience stored in memory.
 
-- **Interactive GUI**: Built with Tkinter, featuring a live grid visualizer, real-time telemetry cards, an algorithm step inspector, and an experience memory table.
-- **Multiple Modes**:
-  - **Autonomous**: Runs the simulation continuously at an adjustable speed (1 to 100 Hz).
-  - **Step-by-Step**: Advances the simulation one perception-action-update step at a time.
-  - **Manual**: Lets you control the agent directly with keyboard controls (W/A/S/D or Arrow keys).
-- **Environment Presets**:
-  - **Empty Grid**: Open 8x8 space for baseline testing.
-  - **Simple Maze**: Deterministic maze with a single corridor.
-  - **Complex Maze**: Multi-corridor maze requiring backtracking and loop avoidance.
-  - **Random Obstacles**: Configurable obstacle count and seed, validated with breadth-first search (BFS) to guarantee a reachable path.
-  - **Custom Environment**: Interactive visual editor allowing you to place walls and set custom start/goal positions.
-- **Pruning Policies**: Supports memory eviction policies (such as evicting the lowest Q-value node) when memory capacity is reached.
-- **Empirical Benchmarks**: Built-in benchmark suite to evaluate how different theta values impact success rates, memory size, lookup comparisons, and steps to the goal.
+The goal is to reach the target while avoiding obstacles and unnecessary loops.
+
+The experience memory is implemented as a **singly linked list**, so the agent searches through stored experiences instead of using a neural network.
+
+## Main Features
+
+- Interactive Tkinter GUI
+- Live grid showing the agent's movement
+- Algorithm trace showing decisions
+- Visual experience-memory viewer
+- Analysis charts and episode statistics
+- Autonomous, step-by-step, and manual modes
+- Multiple test environments
+- Random obstacle generation
+- Custom environment editor
+- Loop/cycle avoidance
+- Configurable learning parameters
+- Benchmark experiments for different distance thresholds
+
+### Environments
+
+- **Empty Grid** — open environment
+- **Simple Maze** — small fixed maze
+- **Complex Maze** — larger maze with multiple barriers
+- **Random Obstacles** — automatically generated obstacles
+- **Custom Environment** — create your own layout
+
+## How the Learning Works
+
+Each experience stores information about a state, the action taken, and the reward received.
+
+When the agent reaches a state, it searches its linked-list memory for the closest stored state.
+
+If the state is similar enough, the agent can reuse the previous action. Otherwise, it explores and stores a new experience.
+
+The distance threshold is controlled by **θ (theta)**.
+
+The reward estimate is updated using: text Q_new = Q_old + (reward - Q_old) / n
 
 ## Installation & Requirements
 
@@ -88,3 +117,5 @@ pytest
 # Run tests in verbose mode
 pytest -v
 ```
+
+
