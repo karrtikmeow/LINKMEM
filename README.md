@@ -6,9 +6,7 @@ LINKMEM is an interactive reinforcement learning and navigation project demonstr
 
 ![LINKMEM GUI](screenshots/overview.png)
 
-![Algorithm Trace and Memory](screenshots/trace-memory.png)
-
-![Analysis and Benchmark](screenshots/analysis.png)
+![Algorithm Trace and Memory] <img width="1175" height="837" alt="trace memory" src="https://github.com/user-attachments/assets/e6bdcceb-eed6-4829-a22a-1b5c142b53df" />
 
 ## What does it do?
 
