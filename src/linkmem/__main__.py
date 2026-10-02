@@ -78,7 +78,10 @@ def run_headless_demo():
 
 def main():
     """Main CLI entry point."""
-    if "--headless" in sys.argv or "-h" in sys.argv:
+    if "--benchmark" in sys.argv or "-b" in sys.argv:
+        from linkmem.experiments.benchmark import run_benchmark
+        run_benchmark()
+    elif "--headless" in sys.argv or "-h" in sys.argv:
         run_headless_demo()
     else:
         from linkmem.gui.app import run_gui
